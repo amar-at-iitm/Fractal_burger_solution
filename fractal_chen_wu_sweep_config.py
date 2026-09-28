@@ -37,6 +37,17 @@ Theoretical & Numerical Constraints:
 # =============================================================================
 # Grid Sweep Configuration (Full Admissible Discrete Space)
 # =============================================================================
+
+sweep_config_best = {
+    "method" : "grid", 
+    "metric" : {"name": "Linf_error", "goal": "minimize"},
+    "parameters" : {"f_alpha1": {"values" : [-0.00393]},
+                    "f_alpha2": {"values" : [0.00149]},
+                   "f_alpha3": {"values" : [0.00262]}
+                  }
+}
+
+
 sweep_config = {
     "method": "grid",
     "metric": {"name": "Linf_error", "goal": "minimize"},
