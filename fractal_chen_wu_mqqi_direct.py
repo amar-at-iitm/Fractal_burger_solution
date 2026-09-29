@@ -9,7 +9,7 @@ from fractal_burger_solver import (
     pointwise_fractal,
 )
 from mqqi.problems import cole_analytic_solution
-from fractal_chen_wu_sweep_config import sweep_config
+from fractal_chen_wu_sweep_config_R100 import sweep_config_bayes
 
 # Authenticate with Weights & Biases (uses WANDB_API_KEY environment variable or cached login)
 wandb_key = os.environ.get("WANDB_API_KEY")
@@ -284,6 +284,6 @@ def fractal_optimization():
 # ============================================================================
 if __name__ == "__main__":
     project_name = os.environ.get("WANDB_PROJECT", "Burger_Chen_Wu_fractal_optimization")
-    sweep_id = wandb.sweep(sweep_config, project=project_name)
+    sweep_id = wandb.sweep(sweep_config_bayes, project=project_name)
     wandb.agent(sweep_id, function=fractal_optimization)
     print("Direct loop sweep complete")
