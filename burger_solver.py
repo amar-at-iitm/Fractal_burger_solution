@@ -146,27 +146,6 @@ def error_function(i: int, x: np.ndarray, f: np.ndarray, xk: np.ndarray, alpha: 
     return float(f[i] - rbf_correction(x[i], xk, alpha, s))
 
 
-def L_W2(i: int, x: np.ndarray, f: np.ndarray, xk: np.ndarray, alpha: np.ndarray, s: float, c: float) -> float:
-    """Evaluates the Wu-Schaback quasi-interpolant (L_W2 f)(x_i)."""
-    rbf_part = rbf_correction(x[i], xk, alpha, s)
-    e_vals = np.array([error_function(p, x, f, xk, alpha, s) for p in range(len(x))])
-    d = np.array([psi(x[i], j, x, c) for j in range(len(x))])
-    ld_part = float(e_vals @ d)
-    return rbf_part + ld_part
-
-
-def d2_L_W2(i: int, x: np.ndarray, f: np.ndarray, xk: np.ndarray, alpha: np.ndarray, s: float, c: float) -> float:
-    """Evaluates the second derivative of the Wu-Schaback operator (L_W2 f)''(x_i).
-
-    (L_W2 f)''(x_i) = sum_j alpha_j varphi(x_i - x_{k_j}, s) + sum_p e(x_p) psi_p''(x_i).
-    """
-    xx = x[i]
-    rbf_part = float(np.sum(alpha * varphi(xx - xk, s)))
-    e_vals = np.array([error_function(p, x, f, xk, alpha, s) for p in range(len(x))])
-    ld_part = sum(e_vals[p] * d2_psi(xx, p, x, c) for p in range(len(x)))
-    return rbf_part + ld_part
-
-
 def d2_psi_matrix(x: np.ndarray, c: float) -> np.ndarray:
     """Precomputes the full matrix of second derivatives Psi''[i, j] = psi_j''(x_i)."""
     n = len(x) - 1
