@@ -260,7 +260,7 @@ def fractal_optimization():
         print(f" New best Linf error: {best_Linf_error:.6e}")
         print(f" New best RMS error:  {best_RMS_error:.6e}")
 
-        file_name = f"best_results_fractal_mqqi_T_{T}_R100.txt"
+        file_name = f"results/best_results_fractal_mqqi_T_{T}_R100.txt"
         with open(file_name, "w") as f:
             f.write(f"Fractal MQQI at time T={T}   and R=100\n")
             f.write(f"Best Linf error: {best_Linf_error:.6e}\n")
