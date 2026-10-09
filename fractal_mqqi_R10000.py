@@ -8,7 +8,7 @@ from fractal_burger_solver import (
     build_fractal_second_derivative,
     pointwise_fractal,
 )
-from fractal_mqqi_sweep_config_R10000 import sweep_config_bayes
+from fractal_sweep_config_R10000 import sweep_config_best
 
 # Authenticate with Weights & Biases (uses WANDB_API_KEY environment variable or cached login)
 wandb_key = os.environ.get("WANDB_API_KEY")
@@ -294,9 +294,9 @@ def fractal_optimization():
         print(f" New best Linf error vs Christie: {best_Linf_error:.6e}")
         print(f" New best RMS error vs Christie:  {best_RMS_error:.6e}")
 
-        file_name = f"best_results_chen_wu_mqqi_R10000_T_{T}.txt"
+        file_name = f"results/best_results_fractal_mqqi_T_{T}_R10000.txt"
         with open(file_name, "w") as f:
-            f.write(f"MQQI at time T={T} (R={R}):\n")
+            f.write(f"Fractal MQQI at time T={T} and (R={R}):\n")
             f.write(f"Best Linf error: {best_Linf_error:.6e}\n")
             f.write(f"Best RMS error:  {best_RMS_error:.6e}\n")
             f.write(f"Parameters: alpha1={f_alpha1}, alpha2={f_alpha2}, alpha3={f_alpha3}\n")
@@ -317,7 +317,7 @@ def fractal_optimization():
 # Main Entry Point
 # ============================================================================
 if __name__ == "__main__":
-    project_name = os.environ.get("WANDB_PROJECT", "Burger_Chen_Wu_fractal_optimization_R10000")
-    sweep_id = wandb.sweep(sweep_config_bayes, project=project_name)
+    project_name = os.environ.get("WANDB_PROJECT", "fractal_mqqi_R10000_best")
+    sweep_id = wandb.sweep(sweep_config_best, project=project_name)
     wandb.agent(sweep_id, function=fractal_optimization)
     print("Direct loop sweep complete")
