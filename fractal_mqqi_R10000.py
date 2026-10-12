@@ -8,7 +8,7 @@ from fractal_burger_solver import (
     build_fractal_second_derivative,
     pointwise_fractal,
 )
-from fractal_chen_wu_sweep_config_R10000 import sweep_config_bayes
+from fractal_mqqi_sweep_config_R10000 import sweep_config_bayes
 
 # Authenticate with Weights & Biases (uses WANDB_API_KEY environment variable or cached login)
 wandb_key = os.environ.get("WANDB_API_KEY")
