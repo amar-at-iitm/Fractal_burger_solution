@@ -5,11 +5,12 @@ import numpy as np
 import wandb
 
 from fractal_burger_solver import (
+    build_fractal_first_derivative,
     build_fractal_second_derivative,
     pointwise_fractal,
 )
 from mqqi.problems import cole_analytic_solution
-from fractal_sweep_config_R100 import sweep_config_best
+from fractal_sweep_config_R100 import sweep_config
 
 # Authenticate with Weights & Biases (uses WANDB_API_KEY environment variable or cached login)
 wandb_key = os.environ.get("WANDB_API_KEY")
@@ -29,7 +30,7 @@ b = 1.0
 R = 100.0          # Reynolds number (Eq. 3.1)
 m = 100           # Number of spatial subdivisions (x_0, x_1, ..., x_m)
 h = (b - a) / m   # Mesh size h = 0.01 (h_i = h = 1/m, Section 4)
-c = 0.0072        # Multiquadric shape parameter lambda (Eq. 2.6)
+c = 0.0029        # Multiquadric shape parameter lambda (Eq. 2.6)
 tau = 0.001       # Time step size (Section 4)
 T = 1.0           # Final simulation time
 
@@ -60,21 +61,36 @@ u_exact = cole_analytic_solution(x, T, R)
 # Step 1: Precompute Multiquadric Basis Function Derivative Tables
 # (Equations 2.6 and 2.4 in burger_equation.tex)
 # ============================================================================
-def build_basis_first_derivatives(x_nodes: np.ndarray, shape_c: float = c) -> np.ndarray:
-    # from eqaution 2.4 and 2.6
+def build_basis_first_derivatives(
+    x_nodes: np.ndarray,
+    shape_c: float = c,
+    fractal_d: dict | None = None,
+) -> np.ndarray:
+    # from Equations (2.4), (2.6) and Eq. (280) in sn-article_simple.tex
     m_len = len(x_nodes) - 1
     dphi = np.zeros((m_len + 1, m_len + 1), dtype=float)
 
-    for j in range(m_len + 1):
-        xj = x_nodes[j]
-        # Interior and left boundary centers: k = 0, ..., m - 1
-        for k in range(m_len):
-            xk = x_nodes[k]
-            diff_x = xj - xk
-            dphi[j, k] = diff_x / np.sqrt(diff_x**2 + shape_c**2)
+    if fractal_d is None:
+        for j in range(m_len + 1):
+            xj = x_nodes[j]
+            # Interior and left boundary centers: k = 0, ..., m - 1
+            for k in range(m_len):
+                xk = x_nodes[k]
+                diff_x = xj - xk
+                dphi[j, k] = diff_x / np.sqrt(diff_x**2 + shape_c**2)
 
-        # Right boundary center k = m using Eq. (2.4): phi_m'(x_j) = phi_0'(x_j) - 2
-        dphi[j, m_len] = dphi[j, 0] - 2.0
+            # Right boundary center k = m using Eq. (2.4): phi_m'(x_j) = phi_0'(x_j) - 2
+            dphi[j, m_len] = dphi[j, 0] - 2.0
+    else:
+        for j in range(m_len + 1):
+            xj = x_nodes[j]
+            for k in range(m_len):
+                xk = x_nodes[k]
+                diff_x = xj - xk
+                dphi[j, k] = pointwise_fractal(diff_x, fractal_d)
+
+            # Right boundary center k = m using Eq. (286): (phi_N^alpha)'(x_j) = (phi_0^alpha)'(x_j) - 2
+            dphi[j, m_len] = dphi[j, 0] - 2.0
 
     return dphi
 
@@ -136,6 +152,10 @@ def solve_chen_wu_direct(
     uxx = np.zeros(m_len + 1, dtype=float)
     g = np.ones(m_len + 1, dtype=float)
 
+    # Precompute constant basis difference kernels (Remark 1, Eq. 291):
+    diff_dphi = 0.5 * (dphi[:, :m_len] - dphi[:, 1 : m_len + 1]) / h_step
+    diff_d2phi = 0.5 * (d2phi[:, :m_len] - d2phi[:, 1 : m_len + 1]) / h_step
+
     for _ in range(num_steps):
         # --------------------------------------------------------------------
         # Part A: First divided differences of current solution u^n
@@ -146,20 +166,12 @@ def solve_chen_wu_direct(
         # --------------------------------------------------------------------
         # Part B: Direct calculation of (u_x)_j and (u_xx)_j for each node x_j
         #
-        # Eq. (3.5):
-        # (u_x)_j = sum_{k=0}^{m-1} [ (phi_k'(x_j) - phi_{k+1}'(x_j)) / (2*h) ] * (u_{k+1} - u_k)
-        #
-        # Eq. (3.6):
-        # (u_xx)_j = sum_{k=0}^{m-1} [ (phi_k''(x_j) - phi_{k+1}''(x_j)) / (2*h) ] * (u_{k+1} - u_k)
+        # Eq. (280): (u_x)_j = sum_{k=0}^{m-1} diff_dphi[j, k] * (u_{k+1} - u_k)
+        # Eq. (284): (u_xx)_j = sum_{k=0}^{m-1} diff_d2phi[j, k] * (u_{k+1} - u_k)
         # --------------------------------------------------------------------
         for j in range(m_len + 1):
-            # Kernel difference vectors across centers k = 0, ..., m - 1:
-            diff_dphi_j = dphi[j, :m_len] - dphi[j, 1 : m_len + 1]
-            diff_d2phi_j = d2phi[j, :m_len] - d2phi[j, 1 : m_len + 1]
-
-            # Direct summation over k = 0 to m - 1:
-            ux[j] = np.sum(0.5 * (diff_dphi_j / h_step) * delta_u)
-            uxx[j] = np.sum(0.5 * (diff_d2phi_j / h_step) * delta_u)
+            ux[j] = np.dot(diff_dphi[j], delta_u)
+            uxx[j] = np.dot(diff_d2phi[j], delta_u)
 
         # --------------------------------------------------------------------
         # Part C: Upwind dispersion switch function g_j (Equation 3.3)
@@ -222,7 +234,16 @@ def fractal_optimization():
     n_subintervals = len(f_alpha)
     n_iter = 8
 
-    # Precompute fractal multiquadric second derivative table
+    # Precompute fractal multiquadric first and second derivative tables
+    fractal_d = build_fractal_first_derivative(
+        c=c,
+        f_alpha=f_alpha,
+        n_iter=n_iter,
+        a_domain=-1.0,
+        b_domain=1.0,
+        n_sub=n_subintervals,
+        base_type="H5",
+    )
     fractal_dd = build_fractal_second_derivative(
         c=c,
         f_alpha=f_alpha,
@@ -230,9 +251,11 @@ def fractal_optimization():
         a_domain=-1.0,
         b_domain=1.0,
         n_sub=n_subintervals,
+        base_type="H5",
     )
 
-    # Build direct basis second derivative table d2phi[j, k] = (phi^alpha)''_k(x_j)
+    # Build direct basis derivative tables (phi^alpha)'_k(x_j) and (phi^alpha)''_k(x_j)
+    dphi_table = build_basis_first_derivatives(x, shape_c=c, fractal_d=fractal_d)
     d2phi_table = build_basis_second_derivatives(x, shape_c=c, fractal_dd=fractal_dd)
 
     # Solve Burgers' equation directly step-by-step
@@ -249,22 +272,37 @@ def fractal_optimization():
     if np.isnan(f_u_num).any() or np.isinf(f_u_num).any():
         Linf_error = float("inf")
         RMS_error = float("inf")
+        Linf_bench = float("inf")
+        RMS_bench = float("inf")
     else:
+        # Table 2 literature benchmark nodes: x in {0.1, 0.2, ..., 0.9}
+        bench_idx = [int(round(k * 0.10 / h)) for k in range(1, 10)]
+        bench_err = np.abs(f_u_num[bench_idx] - u_exact[bench_idx])
+        Linf_bench = float(np.max(bench_err))
+        RMS_bench = float(np.sqrt(np.mean(bench_err**2)))
+
+        # Full domain (includes steep near-wall shock cliff x in [0.94, 0.99])
         f_abs_err = np.abs(f_u_num - u_exact)
         Linf_error = float(np.max(f_abs_err))
         RMS_error = float(np.sqrt(np.mean(f_abs_err**2)))
 
-    if Linf_error < best_Linf_error:
-        best_Linf_error = Linf_error
-        best_RMS_error = RMS_error
-        print(f" New best Linf error: {best_Linf_error:.6e}")
-        print(f" New best RMS error:  {best_RMS_error:.6e}")
+    # Objective tracked on benchmark nodes corresponding to Table 2
+    if Linf_bench < best_Linf_error:
+        best_Linf_error = Linf_bench
+        best_RMS_error = RMS_bench
+        print(f" New best benchmark Linf error: {best_Linf_error:.6e}")
+        print(f" New best benchmark RMS error:  {best_RMS_error:.6e}")
+        print(f" (Full-domain Linf: {Linf_error:.6e}, RMS: {RMS_error:.6e})")
 
         file_name = f"results/best_results_fractal_mqqi_T_{T}_R100.txt"
         with open(file_name, "w") as f:
-            f.write(f"Fractal MQQI at time T={T}   and R=100\n")
+            f.write(f"Fractal MQQI at time T={T} and R={R} (c={c}, h={h}, tau={tau}):\n")
+            f.write(f"Benchmark Nodes (Table 2, x in [0.1, 0.9]):\n")
             f.write(f"Best Linf error: {best_Linf_error:.6e}\n")
             f.write(f"Best RMS error:  {best_RMS_error:.6e}\n")
+            f.write(f"Full Domain (All {len(x)} nodes):\n")
+            f.write(f"Full Linf error: {Linf_error:.6e}\n")
+            f.write(f"Full RMS error:  {RMS_error:.6e}\n")
             f.write(f"Parameters: alpha1={f_alpha1}, alpha2={f_alpha2}, alpha3={f_alpha3}\n")
             f.write(f"Full f_alpha vector: {f_alpha}\n")
 
@@ -274,7 +312,10 @@ def fractal_optimization():
         "alpha3": f_alpha3,
         "RMS_error": RMS_error,
         "Linf_error": Linf_error,
+        "RMS_bench": RMS_bench,
+        "Linf_bench": Linf_bench,
     })
+
 
     wandb.finish()
 
@@ -283,7 +324,7 @@ def fractal_optimization():
 # Main Entry Point
 # ============================================================================
 if __name__ == "__main__":
-    project_name = os.environ.get("WANDB_PROJECT", "fractal_mqqi_R100_best")
-    sweep_id = wandb.sweep(sweep_config_best, project=project_name)
+    project_name = os.environ.get("WANDB_PROJECT", "fractal_mqqi_R100_optimization")
+    sweep_id = wandb.sweep(sweep_config, project=project_name)
     wandb.agent(sweep_id, function=fractal_optimization)
     print("Direct loop sweep complete")
