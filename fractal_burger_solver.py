@@ -9,7 +9,10 @@ first two derivatives at the boundary nodes.
 from typing import Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 
-from alpha_fractal_function import alpha_fractalize_second_derivative
+from alpha_fractal_function import (
+    alpha_fractalize_first_derivative,
+    alpha_fractalize_second_derivative,
+)
 from burger_solver import (
     varphi,
     error_function,
@@ -24,7 +27,12 @@ __all__ = [
     "dphi",
     "ddphi",
     "H5",
+    "H5_d",
     "H5_dd",
+    "p4",
+    "p4_d",
+    "p4_dd",
+    "build_fractal_first_derivative",
     "build_fractal_second_derivative",
     "pointwise_fractal",
     "d2_fractal_psi",
@@ -86,6 +94,39 @@ def H5(
     )
 
 
+def H5_d(
+    z: Union[float, np.ndarray],
+    x1: float = -1.0,
+    xN: float = 1.0,
+    c: float = 0.0072,
+) -> np.ndarray:
+    """First derivative of the 5th-degree Hermite polynomial base function H5'(z)."""
+    z_arr = np.asarray(z, dtype=float)
+    dx = xN - x1
+
+    phi1 = phi(x1, c)
+    phiN = phi(xN, c)
+    phi1d = dphi(x1, c)
+    phiNd = dphi(xN, c)
+    phi1dd = ddphi(x1, c)
+    phiNdd = ddphi(xN, c)
+
+    h1 = (phiN - phi1 - phi1d * dx - 0.5 * phi1dd * dx**2) / dx**3
+    h2 = (3.0 * (phi1 - phiN) + 2.0 * (phi1d + 0.5 * phiNd) * dx + 0.5 * phi1dd * dx**2) / dx**4
+    h3 = (6.0 * (phiN - phi1) - 3.0 * (phi1d + phiNd) * dx + 0.5 * (phiNdd - phi1dd) * dx**2) / dx**5
+
+    dz = z_arr - x1
+    w = z_arr - xN
+
+    return (
+        phi1d
+        + phi1dd * dz
+        + 3.0 * h1 * dz**2
+        + h2 * (3.0 * dz**2 * w + dz**3)
+        + h3 * (3.0 * dz**2 * w**2 + 2.0 * dz**3 * w)
+    )
+
+
 def H5_dd(
     z: Union[float, np.ndarray],
     x1: float = -2.0,
@@ -118,15 +159,59 @@ def H5_dd(
     )
 
 
-def build_fractal_second_derivative(
+def p4(
+    r: Union[float, np.ndarray],
+    R0: float = 1.0,
+    c: float = 0.0072,
+) -> Union[float, np.ndarray]:
+    """Even quartic base polynomial p4(r) satisfying Eq. (117) in sn-article_simple.tex."""
+    r_arr = np.asarray(r, dtype=float)
+    phi_0 = np.sqrt(R0**2 + c**2)
+    phi_d = R0 / phi_0
+    phi_dd = c**2 / (R0**2 + c**2) ** 1.5
+    u = (r_arr**2 / R0**2) - 1.0
+    res = phi_0 + 0.5 * R0 * phi_d * u + (R0**2 * phi_dd - R0 * phi_d) / 8.0 * (u**2)
+    return float(res) if np.isscalar(r) else res
+
+
+def p4_d(
+    r: Union[float, np.ndarray],
+    R0: float = 1.0,
+    c: float = 0.0072,
+) -> Union[float, np.ndarray]:
+    """First derivative p4'(r) of even quartic base polynomial (Eq. 117 in sn-article_simple.tex)."""
+    r_arr = np.asarray(r, dtype=float)
+    phi_d = R0 / np.sqrt(R0**2 + c**2)
+    phi_dd = c**2 / (R0**2 + c**2) ** 1.5
+    coef = (R0**2 * phi_dd - R0 * phi_d) / (2.0 * R0**2)
+    res = (r_arr / R0) * phi_d + coef * r_arr * ((r_arr / R0) ** 2 - 1.0)
+    return float(res) if np.isscalar(r) else res
+
+
+def p4_dd(
+    r: Union[float, np.ndarray],
+    R0: float = 1.0,
+    c: float = 0.0072,
+) -> Union[float, np.ndarray]:
+    """Second derivative p4''(r) of even quartic base polynomial (Eq. 117 in sn-article_simple.tex)."""
+    r_arr = np.asarray(r, dtype=float)
+    phi_d = R0 / np.sqrt(R0**2 + c**2)
+    phi_dd = c**2 / (R0**2 + c**2) ** 1.5
+    coef = (R0**2 * phi_dd - R0 * phi_d) / (2.0 * R0**2)
+    res = (phi_d / R0) + coef * (3.0 * (r_arr / R0) ** 2 - 1.0)
+    return float(res) if np.isscalar(r) else res
+
+
+def build_fractal_first_derivative(
     c: float,
     f_alpha: Union[float, List[float], np.ndarray],
     n_iter: int = 3,
-    a_domain: float = -2.0,
-    b_domain: float = 2.0,
+    a_domain: float = -1.0,
+    b_domain: float = 1.0,
     n_sub: Optional[int] = None,
+    base_type: str = "H5",
 ) -> Dict[str, np.ndarray]:
-    """Constructs the precomputed alpha-fractalized MQ second derivative table.
+    """Constructs the precomputed alpha-fractalized MQ first derivative table (phi^alpha)'.
 
     Parameters
     ----------
@@ -136,16 +221,70 @@ def build_fractal_second_derivative(
         Fractal scaling parameters alpha_k.
     n_iter : int, default=3
         Number of fractal recursion stages.
-    a_domain, b_domain : float, default=(-2.0, 2.0)
+    a_domain, b_domain : float, default=(-1.0, 1.0)
         Domain encompassing all difference coordinates (x_i - x_j).
     n_sub : int, optional
         Number of subintervals. If None, inferred from len(f_alpha).
+    base_type : str, default='p4'
+        Base polynomial: 'p4' (quartic polynomial, Eq. 117) or 'H5'.
+    """
+    if n_sub is None:
+        n_sub = len(f_alpha) if hasattr(f_alpha, "__len__") else 10
+
+    f1_func = lambda z: dphi(z, c=c)
+    if base_type == "p4":
+        R0 = max(abs(a_domain), abs(b_domain))
+        g1_func = lambda z: p4_d(z, R0=R0, c=c)
+    else:
+        g1_func = lambda z: H5_d(z, x1=a_domain, xN=b_domain, c=c)
+
+    return alpha_fractalize_first_derivative(
+        f1=f1_func,
+        g1=g1_func,
+        a=a_domain,
+        b=b_domain,
+        n_sub=n_sub,
+        in_alpha=f_alpha,
+        n_iter=n_iter,
+        dict=True,
+    )
+
+
+def build_fractal_second_derivative(
+    c: float,
+    f_alpha: Union[float, List[float], np.ndarray],
+    n_iter: int = 3,
+    a_domain: float = -1.0,
+    b_domain: float = 1.0,
+    n_sub: Optional[int] = None,
+    base_type: str = "H5",
+) -> Dict[str, np.ndarray]:
+    """Constructs the precomputed alpha-fractalized MQ second derivative table (phi^alpha)''.
+
+    Parameters
+    ----------
+    c : float
+        MQ shape parameter.
+    f_alpha : float, list, or array
+        Fractal scaling parameters alpha_k.
+    n_iter : int, default=3
+        Number of fractal recursion stages.
+    a_domain, b_domain : float, default=(-1.0, 1.0)
+        Domain encompassing all difference coordinates (x_i - x_j).
+    n_sub : int, optional
+        Number of subintervals. If None, inferred from len(f_alpha).
+    base_type : str, default='p4'
+        Base polynomial: 'p4' (quartic polynomial, Eq. 117) or 'H5'.
     """
     if n_sub is None:
         n_sub = len(f_alpha) if hasattr(f_alpha, "__len__") else 10
 
     f2_func = lambda z: ddphi(z, c=c)
-    g2_func = lambda z: H5_dd(z, x1=a_domain, xN=b_domain, c=c)
+    if base_type == "p4":
+        R0 = max(abs(a_domain), abs(b_domain))
+        g2_func = lambda z: p4_dd(z, R0=R0, c=c)
+    else:
+        g2_func = lambda z: H5_dd(z, x1=a_domain, xN=b_domain, c=c)
 
     return alpha_fractalize_second_derivative(
         f2=f2_func,
