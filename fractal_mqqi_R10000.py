@@ -5,6 +5,7 @@ import numpy as np
 import wandb
 
 from fractal_burger_solver import (
+    build_fractal_first_derivative,
     build_fractal_second_derivative,
     pointwise_fractal,
 )
@@ -96,21 +97,36 @@ u_exact = christie_accurate_solution(x)
 # Step 1: Precompute Multiquadric Basis Function Derivative Tables
 # (Equations 2.6 and 2.4 in burger_equation.tex)
 # ============================================================================
-def build_basis_first_derivatives(x_nodes: np.ndarray, shape_c: float = c) -> np.ndarray:
-    # from equation 2.4 and 2.6
+def build_basis_first_derivatives(
+    x_nodes: np.ndarray,
+    shape_c: float = c,
+    fractal_d: dict | None = None,
+) -> np.ndarray:
+    # from Equations (2.4), (2.6) and Eq. (280) in sn-article_simple.tex
     m_len = len(x_nodes) - 1
     dphi = np.zeros((m_len + 1, m_len + 1), dtype=float)
 
-    for j in range(m_len + 1):
-        xj = x_nodes[j]
-        # Interior and left boundary centers: k = 0, ..., m - 1
-        for k in range(m_len):
-            xk = x_nodes[k]
-            diff_x = xj - xk
-            dphi[j, k] = diff_x / np.sqrt(diff_x**2 + shape_c**2)
+    if fractal_d is None:
+        for j in range(m_len + 1):
+            xj = x_nodes[j]
+            # Interior and left boundary centers: k = 0, ..., m - 1
+            for k in range(m_len):
+                xk = x_nodes[k]
+                diff_x = xj - xk
+                dphi[j, k] = diff_x / np.sqrt(diff_x**2 + shape_c**2)
 
-        # Right boundary center k = m using Eq. (2.4): phi_m'(x_j) = phi_0'(x_j) - 2
-        dphi[j, m_len] = dphi[j, 0] - 2.0
+            # Right boundary center k = m using Eq. (2.4): phi_m'(x_j) = phi_0'(x_j) - 2
+            dphi[j, m_len] = dphi[j, 0] - 2.0
+    else:
+        for j in range(m_len + 1):
+            xj = x_nodes[j]
+            for k in range(m_len):
+                xk = x_nodes[k]
+                diff_x = xj - xk
+                dphi[j, k] = pointwise_fractal(diff_x, fractal_d)
+
+            # Right boundary center k = m using Eq. (286): (phi_N^alpha)'(x_j) = (phi_0^alpha)'(x_j) - 2
+            dphi[j, m_len] = dphi[j, 0] - 2.0
 
     return dphi
 
@@ -256,7 +272,16 @@ def fractal_optimization():
     n_subintervals = len(f_alpha)
     n_iter = 8
 
-    # Precompute fractal multiquadric second derivative table
+    # Precompute fractal multiquadric first and second derivative tables
+    fractal_d = build_fractal_first_derivative(
+        c=c,
+        f_alpha=f_alpha,
+        n_iter=n_iter,
+        a_domain=-1.0,
+        b_domain=1.0,
+        n_sub=n_subintervals,
+        base_type="H5",
+    )
     fractal_dd = build_fractal_second_derivative(
         c=c,
         f_alpha=f_alpha,
@@ -264,9 +289,11 @@ def fractal_optimization():
         a_domain=-1.0,
         b_domain=1.0,
         n_sub=n_subintervals,
+        base_type="H5",
     )
 
-    # Build direct basis second derivative table d2phi[j, k] = (phi^alpha)''_k(x_j)
+    # Build direct basis derivative tables (phi^alpha)'_k(x_j) and (phi^alpha)''_k(x_j)
+    dphi_table = build_basis_first_derivatives(x, shape_c=c, fractal_d=fractal_d)
     d2phi_table = build_basis_second_derivatives(x, shape_c=c, fractal_dd=fractal_dd)
 
     # Solve Burgers' equation directly step-by-step
@@ -283,22 +310,41 @@ def fractal_optimization():
     if np.isnan(f_u_num).any() or np.isinf(f_u_num).any():
         Linf_error = float("inf")
         RMS_error = float("inf")
+        Linf_bench = float("inf")
+        RMS_bench = float("inf")
     else:
+        # 17 Christie & Mitchell (1978) Table 3 benchmark nodes: x_k = k / 18
+        x_tab_vals = np.array([
+            0.0422, 0.0843, 0.1263, 0.1684, 0.2103, 0.2522, 0.2939, 0.3355, 0.3769,
+            0.4182, 0.4592, 0.5000, 0.5404, 0.5806, 0.6203, 0.6596, 0.6983,
+        ])
+        bench_idx = [int(round((k / 18.0) / h)) for k in range(1, 18)]
+        bench_err = np.abs(f_u_num[bench_idx] - x_tab_vals)
+        Linf_bench = float(np.max(bench_err))
+        RMS_bench = float(np.sqrt(np.mean(bench_err**2)))
+
+        # Full grid comparison
         f_abs_err = np.abs(f_u_num - u_exact)
         Linf_error = float(np.max(f_abs_err))
         RMS_error = float(np.sqrt(np.mean(f_abs_err**2)))
 
-    if Linf_error < best_Linf_error:
-        best_Linf_error = Linf_error
-        best_RMS_error = RMS_error
-        print(f" New best Linf error vs Christie: {best_Linf_error:.6e}")
-        print(f" New best RMS error vs Christie:  {best_RMS_error:.6e}")
+    # Track best results on the 17 benchmark nodes (Table 3)
+    if Linf_bench < best_Linf_error:
+        best_Linf_error = Linf_bench
+        best_RMS_error = RMS_bench
+        print(f" New best benchmark Linf error vs Christie: {best_Linf_error:.6e}")
+        print(f" New best benchmark RMS error vs Christie:  {best_RMS_error:.6e}")
+        print(f" (Full-grid Linf vs extrapolated: {Linf_error:.6e})")
 
         file_name = f"results/best_results_fractal_mqqi_T_{T}_R10000.txt"
         with open(file_name, "w") as f:
-            f.write(f"Fractal MQQI at time T={T} and (R={R}):\n")
+            f.write(f"Fractal MQQI at time T={T} and R={R} (c={c}, h={h}, tau={tau}):\n")
+            f.write(f"Benchmark Nodes (Table 3, 17 Christie nodes x_k = k/18):\n")
             f.write(f"Best Linf error: {best_Linf_error:.6e}\n")
             f.write(f"Best RMS error:  {best_RMS_error:.6e}\n")
+            f.write(f"Full Grid (All {len(x)} nodes):\n")
+            f.write(f"Full Linf error: {Linf_error:.6e}\n")
+            f.write(f"Full RMS error:  {RMS_error:.6e}\n")
             f.write(f"Parameters: alpha1={f_alpha1}, alpha2={f_alpha2}, alpha3={f_alpha3}\n")
             f.write(f"Full f_alpha vector: {f_alpha}\n")
 
@@ -308,6 +354,8 @@ def fractal_optimization():
         "alpha3": f_alpha3,
         "RMS_error": RMS_error,
         "Linf_error": Linf_error,
+        "RMS_bench": RMS_bench,
+        "Linf_bench": Linf_bench,
     })
 
     wandb.finish()
